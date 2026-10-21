@@ -549,9 +549,9 @@ function eachPiece(fn){ for (let r=0;r<N;r++) for (let c=0;c<N;c++) if (S.board[
 function findPiece(id){ let f=null; eachPiece(p => { if (p.id===id) f=p; }); return f; }
 function reveal(p){ p.revealed = true; p.candidates = [p.trueType]; }
 const pname = p => (p.promoted ? PROM_NAME[p.trueType] : NAME[p.trueType]);
-const sideLabel = s => (S.mode === 'cpu' ? (s===0 ? 'あなた' : 'CPU') : SIDE_NAME[s]);
+const sideLabel = s => (S.mode === 'cpu' ? (s===S.human ? 'あなた' : 'CPU') : SIDE_NAME[s]);   // CPU対戦では S.human があなたの側(先手後手はランダム)
 // 画面表示用(オンラインでは「先手(あなた)」のように添える。共有データには sideLabel を使う)
-const dispLabel = s => (S.mode === 'online' ? ONL.label(s) : sideLabel(s));
+const dispLabel = s => (S.mode === 'online' ? ONL.label(s) : S.mode === 'cpu' ? `${sideLabel(s)}(${SIDE_NAME[s]})` : sideLabel(s));
 // オンラインでは、席の色(ホストの部屋で選んだ色)を手番の丸に使う
 const dotStyle = s => { const c = S.mode === 'online' ? ONL.dotColor(s) : ''; return c ? ` style="background:${c}"` : ''; };
 
@@ -1236,9 +1236,10 @@ function hideOv(id){ $('#'+id).classList.remove('show'); }
 function startGame(mode){
   clearTimers();
   S = newState(mode); history = [];
-  if (mode === 'cpu') S.cpuLevel = UI.cpuLevel;
+  if (mode === 'cpu'){ S.cpuLevel = UI.cpuLevel; S.human = Math.random() < 0.5 ? 0 : 1; }
   showScreen('game');
-  startSetup(0);
+  startSetup(mode === 'cpu' ? S.human : 0);
+  if (mode === 'cpu') toast(S.human === 0 ? 'あなたは先手です' : 'あなたは後手です。CPUから指します');
   if (mode === 'pvp') showHandover('先手の配置', '先手の方が駒を並べます。後手の方は画面を見ないでください。', null, false);
 }
 function startSetup(side){
@@ -1252,7 +1253,7 @@ function confirmSetup(){
   if (TYPES.some(t => !UI.place[t])) return;
   if (S.mode === 'online'){ ONL.submitSetup(); return; }
   TYPES.forEach(t => { const [r,c] = UI.place[t]; S.board[r][c] = mkPiece(side, t, true); });
-  if (S.mode === 'cpu'){ cpuSetup(1); beginPlay(); }
+  if (S.mode === 'cpu'){ cpuSetup(1 - S.human); beginPlay(); if (S.turn !== S.human) cpuTurn(); }
   else if (side === 0){
     startSetup(1);
     showHandover('後手の配置', '端末を後手の方に渡してください。先手の方は画面を見ないでください。', null, false);
@@ -1277,13 +1278,7 @@ function afterMove(){
     return;
   }
   if (S.mode === 'cpu'){
-    if (S.turn === 1){
-      UI.busy = true; render();
-      cpuTimer = setTimeout(() => {
-        cpuTimer = null;
-        cpuThink(1, m => { m = m || legalMoves(1)[0]; if (m) applyMove(m); UI.busy = false; afterMove(); });
-      }, (S.cpuLevel || 2) >= 3 ? 350 : 800);
-    } else render();
+    if (S.turn !== S.human) cpuTurn(); else render();
   } else {
     // 2人対戦:指した人に結果を見せてから受け渡し画面へ
     UI.busy = true; render();
@@ -1295,14 +1290,22 @@ function afterMove(){
     }, 1000);
   }
 }
+function cpuTurn(){
+  const side = S.turn;
+  UI.busy = true; render();
+  cpuTimer = setTimeout(() => {
+    cpuTimer = null;
+    cpuThink(side, m => { m = m || legalMoves(side)[0]; if (m) applyMove(m); UI.busy = false; afterMove(); });
+  }, (S.cpuLevel || 2) >= 3 ? 350 : 800);
+}
 function undo(direct){
   if (S && S.mode === 'online'){ toast('オンライン対戦では待ったはできません'); return; }
   if (!S || S.phase === 'setup' || !history.length){ toast('これ以上戻せません'); return; }
   clearTimers(); UI.busy = false;
   ['over','promo','handover'].forEach(hideOv);
   if (S.mode === 'cpu'){
-    do { S = JSON.parse(history.pop()); } while (history.length && S.turn !== 0);
-    UI.viewSide = 0;
+    do { S = JSON.parse(history.pop()); } while (history.length && S.turn !== S.human);
+    UI.viewSide = S.human;
   } else S = JSON.parse(history.pop());
   UI.sel = null; UI.info = null; UI.anim.clear();
   S.log = '待ったをしました';
@@ -1315,6 +1318,7 @@ function undo(direct){
     render();
   }
   toast('待った');
+  if (S.mode === 'cpu' && S.turn !== S.human) cpuTurn();   // 後手で最初まで戻した時は、CPUが指し直す
 }
 function showHandover(title, sub, cb, allowUndo){
   UI.hoCb = cb;
@@ -1325,7 +1329,7 @@ function showHandover(title, sub, cb, allowUndo){
 function showOver(){
   const w = S.winner, online = S.mode === 'online';
   $('#ovTitle').textContent = online ? (ONL.side() < 0 ? `${dispLabel(w)}の勝ち` : (w === ONL.side() ? 'あなたの勝ち' : 'あなたの負け'))
-    : S.mode === 'cpu' ? (w===0 ? 'あなたの勝ち' : 'CPUの勝ち') : `${SIDE_NAME[w]}の勝ち`;
+    : S.mode === 'cpu' ? (w===S.human ? 'あなたの勝ち' : 'CPUの勝ち') : `${SIDE_NAME[w]}の勝ち`;
   $('#ovReason').textContent = `${S.reason}。${S.ply}手で終局。`;
   let vt = '';
   if (online){
@@ -1344,7 +1348,7 @@ function showOver(){
 function canAct(){
   if (!S || S.phase !== 'play' || UI.busy) return false;
   if (S.mode === 'online') return ONL.canAct();
-  return S.mode === 'pvp' ? S.turn === UI.viewSide : S.turn === 0;
+  return S.mode === 'pvp' ? S.turn === UI.viewSide : S.turn === S.human;
 }
 function toast(html, isReveal){
   const el = document.createElement('div');
@@ -1387,7 +1391,7 @@ function render(){
   let st;
   if (setup) st = '色付きの2段に6枚を置きます。ドラッグするか、駒→マスの順にタップ。';
   else if (S.phase === 'over') st = S.reason;
-  else if (UI.busy && S.mode === 'cpu' && S.turn === 1) st = `CPU(${(CPU_LEVELS[S.cpuLevel] || CPU_LEVELS[2]).name})が考えています…`;
+  else if (UI.busy && S.mode === 'cpu' && S.turn !== S.human) st = `CPU(${(CPU_LEVELS[S.cpuLevel] || CPU_LEVELS[2]).name})が考えています…`;
   else if (canAct() && UI.sel) st = UI.sel.kind === 'h' ? `${NAME[UI.sel.type]}を打つマスを選んでください` : '移動先を選んでください';
   else if (S.mode === 'online' && S.pending) st = ONL.side() < 0 ? '取られた駒の正体が公開されるのを待っています…' : S.pending.by === ONL.side() ? '取った駒の正体を、相手の端末が公開するのを待っています…' : '取られた駒の正体を公開しています…';
   else if (S.mode === 'online' && S.turn !== ONL.side()) st = `${ONL.side() < 0 ? dispLabel(S.turn) : '相手'}の番です。${S.log ? '直前の手:' + S.log : ''}`;

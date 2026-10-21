@@ -68,6 +68,12 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
 .seal{position:absolute;bottom:-6px;left:-30px;writing-mode:horizontal-tb;width:30px;height:30px;border-radius:4px;background:var(--shu);color:#fbf3e6;font-size:17px;display:flex;align-items:center;justify-content:center;transform:rotate(-8deg);letter-spacing:0}
 .subtitle{margin:0;color:var(--sub);font-size:15px;line-height:1.8}
 .menu-btns{display:flex;flex-direction:column;gap:10px;width:min(300px,100%)}
+.cpugrp{display:flex;flex-direction:column;gap:6px;margin-bottom:6px}
+.lvsel{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--surface)}
+.lvsel button{flex:1;padding:8px 0;border:0;background:none;color:var(--sub);font-weight:700;font-size:14px;cursor:pointer}
+.lvsel button+button{border-left:1px solid var(--line)}
+.lvsel button[aria-checked="true"]{color:var(--ink);background:var(--zone);box-shadow:inset 0 -3px 0 var(--shu)}
+.lvnote{margin:0;font-size:12px;color:var(--sub);min-height:1.5em}
 .deco{display:flex;gap:6px}
 .deco .pcw{width:38px;height:42px}
 .deco .pc .k{font-size:19px}
@@ -272,7 +278,11 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
   <p class="subtitle">五×五のミニ将棋。駒の正体は伏せたまま。<br>動きから相手の駒を見破ってください。</p>
   <div class="deco" id="deco"></div>
   <div class="menu-btns">
-    <button class="btn primary" data-act="startCpu">CPUと対戦</button>
+    <div class="cpugrp">
+      <button class="btn primary" data-act="startCpu">CPUと対戦</button>
+      <div class="lvsel" role="radiogroup" aria-label="CPUの強さ" id="lvSel"></div>
+      <p class="lvnote" id="lvNote"></p>
+    </div>
     <button class="btn" data-act="startPvp">2人で対戦(同じ端末)</button>
     <button class="btn" data-act="startOnline">オンライン対戦</button>
     <button class="btn" data-act="rules">ルールを読む</button>
@@ -449,7 +459,6 @@ const PROMOTABLE = {R:true,B:true,S:true,P:true};
 const ZONE_DEPTH = 1;                          // 成りゾーンの段数(敵陣最奥から)
 const SETUP_ROWS = 2;                          // 初期配置できる自陣の段数
 const SIDE_NAME = ['先手','後手'];
-const CPU_VALUE = {K:1000,R:10,B:8,G:6,S:5,P:1}; // CPUが駒を取る時の価値
 
 // 盤の座標:r=0が上(後手側)、r=4が下(先手側)。owner 0=先手、1=後手
 const fwd = o => (o === 0 ? -1 : 1);                       // 前方向の行の増分
@@ -521,7 +530,7 @@ let S = null;          // ゲーム状態(待ったのためJSONで丸ごと保�
 let history = [];
 const UI = {viewSide:0, sel:null, info:null, anim:new Set(), busy:false,
             setupSide:0, place:null, setupSel:null, pending:null, hoCb:null,
-            showEval:loadEvalPref(), replayPly:0};
+            showEval:loadEvalPref(), replayPly:0, cpuLevel:2};
 let cpuTimer = null, passTimer = null;
 
 const blankHand = () => ({K:0,R:0,B:0,G:0,S:0,P:0});
@@ -695,38 +704,344 @@ function applyMove(m, silent){   // silent=true:演出なし(終局後の再現�
 }
 
 /* =========================================================
-   6. CPU(簡単):相手の正体は使わず、公開情報と候補だけで判断
+   6. CPU ― 強さ4段階。相手の伏せ駒の正体は使わない(ずるをしない)
+   ・相手の伏せ駒は「公開情報と矛盾しない正体の割り当て」を全列挙し、
+     そこから何通りか選んで、それぞれの世界で先読みする(平均して手を選ぶ)
+   ・先読みは αβ探索+駒の取り合いの延長読み。玉を取られる手は大きく減点
+   ・上級は、自分の玉の正体がばれる動きも少し嫌う
    ========================================================= */
-function publicValue(p){  // 公開情報から見た期待価値
-  const c = p.revealed ? [p.trueType] : p.candidates;
-  return c.reduce((a,t) => a + CPU_VALUE[t], 0) / c.length;
-}
-function cpuPlay(){
-  const side = S.turn;
-  // 自分の駒の正体はCPU自身が知っているので、二歩は避ける
-  const moves = legalMoves(side).filter(m => !(m.kind==='drop' && m.ptype==='P' && ownPawnInFile(side, m.to[1], null)));
-  if (!moves.length) return;
-  let best = null, bs = -Infinity;
-  for (const m of moves){
-    let s = Math.random();
-    if (m.kind === 'move'){
-      const target = S.board[m.to[0]][m.to[1]];
-      if (target) s += 20 + publicValue(target) * 3;   // 取れる駒は取る
-      if (m.promote) s += 3;
-      if (S.board[m.from[0]][m.from[1]].trueType === 'K') s -= 0.6; // 玉はなるべく動かさない
-    } else s -= 0.35;
-    if (s > bs){ bs = s; best = m; }
+const CPU_LEVELS = {
+  1:{name:'入門', depth:1, worlds:1,  budget:150,  noise:2.5,  hide:0,   note:'駒の取り合いだけを見ます'},
+  2:{name:'初級', depth:2, worlds:3,  budget:500,  noise:1.0,  hide:0,   note:'相手の次の一手まで読みます'},
+  3:{name:'中級', depth:3, worlds:6,  budget:1200, noise:0.3,  hide:1.5, note:'3手先まで読み、伏せ駒の正体を推し量ります'},
+  4:{name:'上級', depth:4, worlds:12, budget:2200, noise:0.05, hide:3,   note:'4手先まで読み、自分の玉の正体も隠します'},
+};
+function loadCpuLevel(){ try { const v = +localStorage.getItem('oboro-cpu-lv'); return CPU_LEVELS[v] ? v : 2; } catch(e){ return 2; } }
+function saveCpuLevel(v){ try { localStorage.setItem('oboro-cpu-lv', String(v)); } catch(e){} }
+
+// --- 探索用の軽い盤 ---------------------------------------------
+// 駒コード:先後(16) + 成り(8) + 種類(1〜6)。0=空き。盤は25マスの配列、持ち駒は [side][種類]
+const ENG_T = [null,'K','R','B','G','S','P'], ENG_I = {K:1,R:2,B:3,G:4,S:5,P:6};
+const ENG_WIN = 10000;
+const ENG_VAL = new Float64Array(16);   // (成り*8 + 種類) → 価値
+{ const base = {K:0,R:10,B:8,G:6,S:5,P:1}, prom = {R:3,B:3,S:1,P:5};   // 形勢判断(6b)と同じ価値。玉は取られたら負けなので探索側で扱う
+  TYPES.forEach(t => { ENG_VAL[ENG_I[t]] = base[t]; ENG_VAL[8 + ENG_I[t]] = base[t] + (prom[t] || 0); }); }
+const ENG_HAND = 1.15;                  // 持ち駒はやや高め
+// 動ける先の表:ENG_ST[先後][成り][種類][マス] = 1歩の行き先、ENG_SL[...] = 走る方向ごとのマス列
+const ENG_ST = [], ENG_SL = [];
+for (let o=0;o<2;o++){
+  ENG_ST[o] = []; ENG_SL[o] = [];
+  for (let pr=0;pr<2;pr++){
+    ENG_ST[o][pr] = []; ENG_SL[o][pr] = [];
+    for (let t=1;t<=6;t++){
+      const rule = ruleOf(ENG_T[t], !!pr), f = fwd(o);
+      ENG_ST[o][pr][t] = []; ENG_SL[o][pr][t] = [];
+      for (let sq=0;sq<25;sq++){
+        const r = Math.floor(sq/N), c = sq % N, st = [], sl = [];
+        if (rule){
+          for (const [a,b] of rule.steps || []){ const nr=r+a*f, nc=c+b; if (inBoard(nr,nc)) st.push(nr*N+nc); }
+          for (const [a,b] of rule.slides || []){
+            const ray = []; let nr=r+a*f, nc=c+b;
+            while (inBoard(nr,nc)){ ray.push(nr*N+nc); nr+=a*f; nc+=b; }
+            if (ray.length) sl.push(ray);
+          }
+        }
+        ENG_ST[o][pr][t][sq] = st; ENG_SL[o][pr][t][sq] = sl;
+      }
+    }
   }
-  applyMove(best);
 }
+const engLast = (o, sq) => (o === 0 ? sq < N : sq >= N*(N-1));   // 最奥の段(成りゾーン=1段)
+
+const E = {b:new Int8Array(25), h:[new Int8Array(7), new Int8Array(7)], kcap:false, nodes:0, stop:0, aborted:false};
+// 指し手は整数:from(0〜24、打つ時は 25+種類) | to<<5 | 成り<<10
+function engGen(side, capsOnly){
+  const b = E.b, out = [], own = side << 4;
+  E.kcap = false;
+  const add = (from, to, code) => {
+    const tgt = b[to];
+    if (tgt){ if ((tgt & 16) === own) return false; if ((tgt & 7) === 1){ E.kcap = true; } }
+    else if (capsOnly) return true;
+    const t = code & 7, pr = code & 8;
+    if (!pr && t !== 1 && t !== 4 && (engLast(side, from) || engLast(side, to))){
+      if (!(t === 6 && engLast(side, to))) out.push(from | to<<5);   // 歩が最奥へは成り強制
+      out.push(from | to<<5 | 1<<10);
+    } else out.push(from | to<<5);
+    return !tgt;
+  };
+  for (let sq=0; sq<25; sq++){
+    const code = b[sq];
+    if (!code || (code & 16) !== own) continue;
+    const t = code & 7, pr = (code >> 3) & 1;
+    for (const to of ENG_ST[side][pr][t][sq]) add(sq, to, code);
+    for (const ray of ENG_SL[side][pr][t][sq]) for (const to of ray){ if (!add(sq, to, code) || b[to]) break; }
+  }
+  if (capsOnly) return out;
+  const hand = E.h[side];
+  let pawnFiles = 0;
+  if (hand[6]) for (let sq=0; sq<25; sq++) if (b[sq] === (own | 6)) pawnFiles |= 1 << (sq % N);
+  for (let t=1; t<=6; t++){
+    if (!hand[t]) continue;
+    for (let sq=0; sq<25; sq++){
+      if (b[sq]) continue;
+      if (t === 6 && (engLast(side, sq) || (pawnFiles >> (sq % N)) & 1)) continue;   // 行き場のない歩・二歩は打たない
+      out.push((25 + t) | sq<<5);
+    }
+  }
+  return out;
+}
+function engMake(m, side){
+  const from = m & 31, to = (m >> 5) & 31;
+  if (from >= 25){ const t = from - 25; E.h[side][t]--; E.b[to] = (side << 4) | t; return 0; }
+  const p = E.b[from], cap = E.b[to];
+  E.b[to] = (m >> 10) & 1 ? (p | 8) : p; E.b[from] = 0;
+  if (cap) E.h[side][cap & 7]++;
+  return cap;
+}
+function engUnmake(m, side, cap){
+  const from = m & 31, to = (m >> 5) & 31;
+  if (from >= 25){ E.h[side][from - 25]++; E.b[to] = 0; return; }
+  const p = E.b[to];
+  E.b[from] = (m >> 10) & 1 ? (p & ~8) : p; E.b[to] = cap;
+  if (cap) E.h[side][cap & 7]--;
+}
+// 手番側から見た評価値:駒の価値+持ち駒+少しの位置の良さ(前進・玉の守り)
+function engEval(side){
+  const b = E.b; let s = 0; const king = [-1,-1];
+  for (let sq=0; sq<25; sq++){
+    const code = b[sq]; if (!code) continue;
+    const o = code >> 4, t = code & 7;
+    let v = ENG_VAL[code & 15];
+    if (t === 1) king[o] = sq;
+    else if (!(code & 8) && (t >= 4)){ const r = Math.floor(sq/N); v += 0.08 * (o === 0 ? N-1-r : r); }
+    s += o === 0 ? v : -v;
+  }
+  for (let t=2; t<=6; t++) s += (E.h[0][t] - E.h[1][t]) * ENG_VAL[t] * ENG_HAND;
+  for (let o=0; o<2; o++){
+    const k = king[o]; if (k < 0) continue;
+    const kr = Math.floor(k/N), kc = k % N; let near = 0;
+    for (let dr=-1; dr<=1; dr++) for (let dc=-1; dc<=1; dc++){
+      if (!dr && !dc) continue;
+      const r = kr+dr, c = kc+dc; if (!inBoard(r,c)) continue;
+      const q = b[r*N+c]; if (!q) continue;
+      near += (q >> 4) === o ? 0.15 : -0.3;
+    }
+    s += o === 0 ? near : -near;
+  }
+  return side === 0 ? s : -s;
+}
+function engOrder(moves){
+  const b = E.b, sc = new Float64Array(moves.length);
+  for (let i=0;i<moves.length;i++){
+    const m = moves[i], from = m & 31, cap = b[(m >> 5) & 31];
+    let s = 0;
+    if (cap) s = 100 + ENG_VAL[cap & 15] * 10 - (from < 25 ? ENG_VAL[b[from] & 15] : 0);
+    if ((m >> 10) & 1) s += 5;
+    if (from >= 25) s -= 1;
+    sc[i] = s;
+  }
+  const idx = moves.map((_,i) => i).sort((a,c) => sc[c] - sc[a]);
+  return idx.map(i => moves[i]);
+}
+function engTick(){
+  if ((++E.nodes & 1023) === 0 && performance.now() > E.stop) E.aborted = true;
+  return E.aborted;
+}
+function engQS(side, alpha, beta, ply, qd){
+  if (engTick()) return 0;
+  const moves = engGen(side, true);
+  if (E.kcap) return ENG_WIN - ply;
+  const stand = engEval(side);
+  if (stand >= beta || qd >= 6) return stand;
+  if (stand > alpha) alpha = stand;
+  let best = stand;
+  for (const m of engOrder(moves)){
+    const cap = engMake(m, side);
+    const v = -engQS(1 - side, -beta, -alpha, ply + 1, qd + 1);
+    engUnmake(m, side, cap);
+    if (E.aborted) return 0;
+    if (v > best){ best = v; if (v > alpha){ alpha = v; if (alpha >= beta) break; } }
+  }
+  return best;
+}
+function engSearch(side, depth, alpha, beta, ply){
+  if (depth <= 0) return engQS(side, alpha, beta, ply, 0);
+  if (engTick()) return 0;
+  const moves = engGen(side, false);
+  if (E.kcap) return ENG_WIN - ply;
+  if (!moves.length) return -(ENG_WIN - ply);       // 指せる手がない → 負け
+  let best = -Infinity;
+  for (const m of engOrder(moves)){
+    const cap = engMake(m, side);
+    const v = -engSearch(1 - side, depth - 1, -beta, -alpha, ply + 1);
+    engUnmake(m, side, cap);
+    if (E.aborted) return 0;
+    if (v > best){ best = v; if (v > alpha){ alpha = v; if (alpha >= beta) break; } }
+  }
+  return best;
+}
+// 1つの世界でのルートの各手の評価(反復深化。時間切れなら最後に終わった深さの値)
+function engRoot(side, roots, maxDepth, stopAt){
+  E.stop = stopAt; E.aborted = false;
+  let done = null, order = roots.map((_,i) => i);
+  for (let d=1; d<=maxDepth; d++){
+    const sc = new Float64Array(roots.length); let best = -Infinity;
+    for (const i of order){
+      const m = roots[i], cap = engMake(m, side);
+      const v = cap && (cap & 7) === 1 ? ENG_WIN - 1   // この世界では玉を取って勝ち
+              : -engSearch(1 - side, d - 1, -Infinity, -(best - 3), 1);   // 最善から大きく劣る手は粗く打ち切る
+      engUnmake(m, side, cap);
+      if (E.aborted) break;
+      sc[i] = v; if (v > best) best = v;
+    }
+    if (E.aborted) break;
+    done = sc;
+    if (best > ENG_WIN - 100) break;               // 玉を取る筋が見つかった
+    order = order.slice().sort((a,c) => sc[c] - sc[a]);
+  }
+  return done;
+}
+// 勝ち負けの値を平均できる大きさに直す(早い勝ち・遅い負けを少しだけ好む)
+const engNorm = v => (Math.abs(v) > ENG_WIN/2 ? Math.sign(v) * (1000 - (ENG_WIN - Math.abs(v))) : v);
+
+// 相手(side の反対)の伏せ駒について、公開情報と矛盾しない割り当てを全部挙げる
+function cpuWorlds(side){
+  const opp = 1 - side, hidden = [], known = [...S.capturedOrig[opp]];
+  eachPiece(p => { if (p.orig !== opp) return; if (p.revealed) known.push(p.trueType); else hidden.push(p); });
+  const remaining = TYPES.filter(t => !known.includes(t)), out = [];
+  const used = remaining.map(() => false), cur = [];
+  (function rec(k){
+    if (k === hidden.length){ out.push(cur.slice()); return; }
+    for (let i=0;i<remaining.length;i++){
+      if (used[i] || !hidden[k].candidates.includes(remaining[i])) continue;
+      used[i] = true; cur.push(remaining[i]); rec(k+1); cur.pop(); used[i] = false;
+    }
+  })(0);
+  if (!out.length) out.push(hidden.map(p => p.candidates[0]));   // 念のため
+  return {hidden, list: shuffle(out)};
+}
+function cpuLoadWorld(W, assign){
+  const typeOf = new Map(W.hidden.map((p,i) => [p.id, assign[i]]));
+  for (let r=0;r<N;r++) for (let c=0;c<N;c++){
+    const p = S.board[r][c];
+    E.b[r*N+c] = p ? (p.owner << 4) | (p.promoted ? 8 : 0) | ENG_I[typeOf.get(p.id) || p.trueType] : 0;
+  }
+  for (const s of [0,1]) for (const t of TYPES) E.h[s][ENG_I[t]] = S.hands[s][t];
+}
+// 自分の玉が、相手から見て玉だとわかる確率(公開情報で数える)。override:{id, cands} で1枚の候補を差し替え
+function kingExposure(side, override){
+  const hidden = [], known = [...S.capturedOrig[side]];
+  let kingP = null;
+  eachPiece(p => { if (p.orig !== side) return; if (p.trueType === 'K') kingP = p;
+    if (p.revealed) known.push(p.trueType); else hidden.push(p); });
+  if (!kingP) return 1;
+  if (override && override.id === kingP.id && override.cands.length === 1) return 1;
+  if (kingP.revealed) return 1;
+  const remaining = TYPES.filter(t => !known.includes(t));
+  const cands = hidden.map(p => (override && p.id === override.id ? override.cands : p.candidates));
+  const ki = hidden.indexOf(kingP), used = remaining.map(() => false);
+  let total = 0, hit = 0;
+  (function rec(k, isK){
+    if (k === hidden.length){ total++; if (isK) hit++; return; }
+    for (let i=0;i<remaining.length;i++){
+      if (used[i] || !cands[k].includes(remaining[i])) continue;
+      used[i] = true; rec(k+1, k === ki ? remaining[i] === 'K' : isK); used[i] = false;
+    }
+  })(0, false);
+  return total ? hit / total : 1;
+}
+const engToMove = m => {
+  const from = m & 31, to = (m >> 5) & 31, tsq = [Math.floor(to/N), to % N];
+  return from >= 25 ? {kind:'drop', ptype:ENG_T[from - 25], to:tsq}
+                    : {kind:'move', from:[Math.floor(from/N), from % N], to:tsq, promote:!!((m >> 10) & 1)};
+};
+
+let cpuJob = 0;
+// 考えるのは何回かに分けて行い、そのあいだも画面が止まらないようにする
+function cpuThink(side, done){
+  const lv = CPU_LEVELS[S.cpuLevel] || CPU_LEVELS[2], job = ++cpuJob, t0 = performance.now();
+  const W = cpuWorlds(side);
+  cpuLoadWorld(W, W.list[0]);
+  const roots = engGen(side, false);
+  if (!roots.length){ done(null); return; }
+  if (E.kcap){   // 玉が取れるなら取る(相手の伏せ駒の正体は使わず、盤上で確実に取れる時だけ)
+    const k = roots.find(m => { const q = E.b[(m >> 5) & 31]; return q && (q & 7) === 1; });
+    const p = k !== undefined ? S.board[Math.floor(((k >> 5) & 31)/N)][((k >> 5) & 31) % N] : null;
+    if (p && p.revealed){ done(engToMove(k)); return; }
+  }
+  const sum = new Float64Array(roots.length); let n = 0;
+  const nWorlds = Math.min(lv.worlds, W.list.length);
+  const step = () => {
+    if (job !== cpuJob) return;                   // 待った・メニューに戻った
+    const ts = performance.now();
+    cpuLoadWorld(W, W.list[n]);
+    const sc = engRoot(side, roots, lv.depth, Math.max(t0 + lv.budget * 1.3, ts + 120));
+    if (!sc){ finish(); return; }                 // 時間切れで1段も読めなかった世界は使わない
+    for (let i=0;i<roots.length;i++) sum[i] += engNorm(sc[i]);
+    n++;
+    if (n < nWorlds && performance.now() - t0 < lv.budget){ setTimeout(step, 0); return; }
+    finish();
+  };
+  const finish = () => {
+    // 次の一手で玉を取る/取られるかは、すべての割り当てで正確に数え、少数の世界で読んだ分のずれを直す
+    const opp = 1 - side, all = Math.min(W.list.length, 720), exact = new Float64Array(roots.length), seen = new Float64Array(roots.length);
+    for (let w=0; w<all; w++){
+      cpuLoadWorld(W, W.list[w]);
+      for (let i=0;i<roots.length;i++){
+        const cap = engMake(roots[i], side);
+        let v = 0;
+        if (cap && (cap & 7) === 1) v = 1000; else { engGen(opp, true); if (E.kcap) v = -1000; }
+        engUnmake(roots[i], side, cap);
+        exact[i] += v / all;
+        if (w < n) seen[i] += v / n;
+      }
+    }
+    const base = lv.hide ? kingExposure(side, null) : 0;
+    let best = 0, bs = -Infinity;
+    for (let i=0;i<roots.length;i++){
+      let s = sum[i] / Math.max(1, n) + lv.noise * (Math.random() * 2 - 1) + (n ? exact[i] - seen[i] : exact[i]);
+      const m = roots[i], from = m & 31;
+      if (lv.hide && from < 25){   // 伏せた駒を動かすと候補が減る → 自分の玉がばれる度合いの増加を減点
+        const p = S.board[Math.floor(from/N)][from % N];
+        if (p && !p.revealed){
+          const to = (m >> 5) & 31, tr = Math.floor(to/N), pro = !!((m >> 10) & 1);
+          let c = p.candidates.filter(x => canMakeMove(S.board, [Math.floor(from/N), from % N], [tr, to % N], x, false, side));
+          if (!pro) c = c.filter(x => !isDeadSquare(x, side, tr));
+          if (pro) c = [p.trueType];
+          s -= lv.hide * (kingExposure(side, {id:p.id, cands:c}) - base);
+        }
+      }
+      if (s > bs){ bs = s; best = i; }
+    }
+    done(engToMove(roots[best]));
+  };
+  step();
+}
+// CPUの配置。玉は最奥の段。初級以上は、何通りか試して玉の筋が通っていない形を選ぶ
 function cpuSetup(side){
   const back = [], front = [];
   for (let r=0;r<N;r++) for (let c=0;c<N;c++) if (inSetupZone(side,r)) (isLastRank(1-side,r) ? back : front).push([r,c]);
-  shuffle(back);
-  const kingPos = back.pop();
-  const rest = shuffle([...back, ...front]);
-  S.board[kingPos[0]][kingPos[1]] = mkPiece(side, 'K', true);
-  TYPES.filter(t => t!=='K').forEach((t,i) => { const [r,c] = rest[i]; S.board[r][c] = mkPiece(side, t, true); });
+  const one = () => {
+    const bk = shuffle(back.slice()), k = bk.pop(), rest = shuffle([...bk, ...front]);
+    const lay = {K:k}; TYPES.filter(t => t!=='K').forEach((t,i) => lay[t] = rest[i]);
+    return lay;
+  };
+  const risk = lay => {   // 玉から自陣の外まで、駒に遮られずに通る筋の数(少ないほど安全)と、玉の隣の味方
+    const occ = new Set(TYPES.map(t => lay[t][0]*N + lay[t][1])), [kr,kc] = lay.K;
+    let s = 0;
+    for (const [dr,dc] of DIRS.KING){
+      let r = kr+dr, c = kc+dc;
+      while (inBoard(r,c) && !occ.has(r*N+c)){ if (!inSetupZone(side,r)){ s += 3; break; } r += dr; c += dc; }
+      if (inBoard(kr+dr, kc+dc) && occ.has((kr+dr)*N + kc+dc)) s -= 0.5;
+    }
+    return s + Math.random();
+  };
+  let lay = one();
+  if ((S.cpuLevel || 2) >= 2){
+    let best = risk(lay);
+    for (let i=0;i<80;i++){ const l = one(), v = risk(l); if (v < best){ best = v; lay = l; } }
+  }
+  TYPES.forEach(t => { const [r,c] = lay[t]; S.board[r][c] = mkPiece(side, t, true); });
 }
 function shuffle(a){ for (let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
 
@@ -914,13 +1229,14 @@ function renderRecord(){
    7. 進行
    ========================================================= */
 const $ = s => document.querySelector(s);
-function clearTimers(){ clearTimeout(cpuTimer); clearTimeout(passTimer); cpuTimer = passTimer = null; }
+function clearTimers(){ clearTimeout(cpuTimer); clearTimeout(passTimer); cpuTimer = passTimer = null; cpuJob++; }
 function showScreen(name){ $('#menu').style.display = name==='menu' ? 'flex' : 'none'; $('#game').style.display = name==='game' ? 'block' : 'none'; }
 function hideOv(id){ $('#'+id).classList.remove('show'); }
 
 function startGame(mode){
   clearTimers();
   S = newState(mode); history = [];
+  if (mode === 'cpu') S.cpuLevel = UI.cpuLevel;
   showScreen('game');
   startSetup(0);
   if (mode === 'pvp') showHandover('先手の配置', '先手の方が駒を並べます。後手の方は画面を見ないでください。', null, false);
@@ -963,7 +1279,10 @@ function afterMove(){
   if (S.mode === 'cpu'){
     if (S.turn === 1){
       UI.busy = true; render();
-      cpuTimer = setTimeout(() => { cpuTimer = null; cpuPlay(); UI.busy = false; afterMove(); }, 900);
+      cpuTimer = setTimeout(() => {
+        cpuTimer = null;
+        cpuThink(1, m => { m = m || legalMoves(1)[0]; if (m) applyMove(m); UI.busy = false; afterMove(); });
+      }, (S.cpuLevel || 2) >= 3 ? 350 : 800);
     } else render();
   } else {
     // 2人対戦:指した人に結果を見せてから受け渡し画面へ
@@ -1068,7 +1387,7 @@ function render(){
   let st;
   if (setup) st = '色付きの2段に6枚を置きます。ドラッグするか、駒→マスの順にタップ。';
   else if (S.phase === 'over') st = S.reason;
-  else if (UI.busy && S.mode === 'cpu' && S.turn === 1) st = 'CPUが考えています…';
+  else if (UI.busy && S.mode === 'cpu' && S.turn === 1) st = `CPU(${(CPU_LEVELS[S.cpuLevel] || CPU_LEVELS[2]).name})が考えています…`;
   else if (canAct() && UI.sel) st = UI.sel.kind === 'h' ? `${NAME[UI.sel.type]}を打つマスを選んでください` : '移動先を選んでください';
   else if (S.mode === 'online' && S.pending) st = ONL.side() < 0 ? '取られた駒の正体が公開されるのを待っています…' : S.pending.by === ONL.side() ? '取った駒の正体を、相手の端末が公開するのを待っています…' : '取られた駒の正体を公開しています…';
   else if (S.mode === 'online' && S.turn !== ONL.side()) st = `${ONL.side() < 0 ? dispLabel(S.turn) : '相手'}の番です。${S.log ? '直前の手:' + S.log : ''}`;
@@ -1296,6 +1615,7 @@ document.addEventListener('pointercancel', () => { if (drag && drag.ghost) drag.
    ========================================================= */
 const ACT = {
   startCpu: () => startGame('cpu'),
+  cpuLv: a => { UI.cpuLevel = +a.dataset.lv; saveCpuLevel(UI.cpuLevel); renderLevels(); },
   startPvp: () => startGame('pvp'),
   rules: () => $('#rules').classList.add('show'),
   closeRules: () => hideOv('rules'),
@@ -1972,6 +2292,14 @@ ONL.init();
 // メニューの飾り駒
 $('#deco').innerHTML = ['?','?','角','?','?'].map((t,i) =>
   `<div class="pcw"><div class="pc ${t==='?' ? 'unk' : ''}"><span class="k">${t}</span></div></div>`).join('');
+// CPUの強さの選択(メニュー)
+function renderLevels(){
+  $('#lvSel').innerHTML = Object.entries(CPU_LEVELS).map(([v,L]) =>
+    `<button type="button" role="radio" aria-checked="${+v === UI.cpuLevel}" data-act="cpuLv" data-lv="${v}">${L.name}</button>`).join('');
+  $('#lvNote').textContent = CPU_LEVELS[UI.cpuLevel].note;
+}
+UI.cpuLevel = loadCpuLevel();
+renderLevels();
 showScreen('menu');
 </script>
 </body>

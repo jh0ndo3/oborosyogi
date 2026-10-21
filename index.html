@@ -250,6 +250,16 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
 .seatrow .dot{width:16px;height:16px}
 .onmem,.onnet{font-size:12.5px;color:var(--sub);line-height:1.7;margin-top:4px}
 .onnet{color:var(--shu)}
+/* ---------- ランダム対戦(レート) ---------- */
+.onrate{font-size:13px;color:var(--sub);margin:2px 0 0;line-height:1.6}
+.onrate b{color:var(--ink);font-size:17px;margin:0 2px}
+.onsearch{margin-top:10px;padding:12px;border-radius:6px;border:1px solid var(--ai);background:var(--bg);text-align:center;font-size:14px;line-height:1.7}
+.onsearch .btn{margin-top:8px}
+.onsep{border:none;border-top:1px solid var(--line);margin:16px 0 4px}
+.clock{font-size:13px;font-weight:800;color:var(--ink);white-space:nowrap;margin-right:6px;font-variant-numeric:tabular-nums}
+.clock.low{color:var(--shu)}
+.ratenote{font-size:12px;font-weight:700;color:var(--sub);padding:0 2px}
+.ovrate{font-weight:800;color:var(--ink)!important;font-size:15px!important}
 </style>
 </head>
 <body>
@@ -272,9 +282,10 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
 <!-- ===== ゲーム ===== -->
 <section id="game">
   <div id="app">
-    <div id="top"><div id="turn"></div><div class="topr"><span id="ply"></span><span class="netbadge" id="netBadge" style="display:none"></span><button class="evtoggle" data-act="toggleEval" id="evBtn">形勢</button></div></div>
+    <div id="top"><div id="turn"></div><div class="topr"><span class="clock" id="clock" style="display:none"></span><span id="ply"></span><span class="netbadge" id="netBadge" style="display:none"></span><button class="evtoggle" data-act="toggleEval" id="evBtn">形勢</button></div></div>
     <div id="status"></div>
     <div class="locknote" id="lockNote" style="display:none">🔒 対戦相手にIPアドレスは見えません</div>
+    <div class="ratenote" id="rateNote" style="display:none"></div>
     <div id="evalBar"></div>
     <div class="hand" id="handTop"></div>
     <div id="boardWrap"><div id="board"></div></div>
@@ -295,7 +306,14 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
     <div class="onlbl">色</div><div class="cols" id="onCols"></div>
   </div>
   <div id="onMenu">
-    <button class="btn primary" id="onCreate">ルームを作る</button>
+    <hr class="onsep">
+    <div class="onlbl">ランダム対戦(レートあり)</div>
+    <div class="onrate" id="onRate"></div>
+    <button class="btn primary" id="onRandom">ランダム対戦をはじめる</button>
+    <div class="onsearch" id="onSearch" style="display:none"><div id="onSearchTxt"></div><button class="btn" id="onCancel">探すのをやめる</button></div>
+    <hr class="onsep">
+    <div class="onlbl">友だちと対戦(レートなし)</div>
+    <button class="btn" id="onCreate">ルームを作る</button>
     <div class="llist" id="onRecent" style="margin-top:12px"></div>
     <label class="onlbl" for="onCode">ルームID(4文字)で参加・観戦</label>
     <div class="lbjoin"><input class="oninp" id="onCode" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD"><button class="btn" id="onJoin">参加</button><button class="btn" id="onWatch">観戦</button></div>
@@ -343,11 +361,13 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
   <h2 id="ovTitle"></h2>
   <p id="ovReason"></p>
   <p id="ovVerify"></p>
+  <p id="ovRate" class="ovrate" style="display:none"></p>
   <div class="btns" style="flex-direction:column">
     <button class="btn primary" data-act="record">棋譜と形勢グラフを見る</button>
     <button class="btn" data-act="overClose">盤面を見る(全駒公開)</button>
     <button class="btn" data-act="undo" id="ovUndo">待った</button>
     <button class="btn" data-act="again" id="ovAgain" style="display:none">もう一局(先手後手を入れ替え)</button>
+    <button class="btn" data-act="randomAgain" id="ovRandom" style="display:none">次のランダム対戦へ</button>
     <button class="btn" data-act="toMenu" id="ovMenu">もう一局(メニューへ)</button>
   </div>
 </div></div>
@@ -379,6 +399,13 @@ button:focus-visible{outline:3px solid var(--ai);outline-offset:2px}
     <li>通信はすべて中継サーバー経由で、対戦相手にIPアドレスは見えません。</li>
     <li>駒の正体は中継サーバーが預かり、あなたの端末には自分の駒の正体だけが届きます。指し手はサーバーが本当の駒で検査するので、不正はできません。</li>
     <li>ページを閉じたり、通信が切れたりしても、同じ端末で同じルームIDに入れば、続きから指せます。待ったはできません。</li>
+  </ul>
+  <h3>ランダム対戦(レート)</h3>
+  <ul>
+    <li>「ランダム対戦をはじめる」で、待っている人と自動で組みます。レートの近い人を優先し、待つほど幅を広げます。先手後手はランダムです。</li>
+    <li>レートは1500から始まり、勝つと上がり、負けると下がります(相手が強いほど、勝った時に多く上がります)。</li>
+    <li>持ち時間は、配置が2分、1手ごとに90秒。配置の時間が切れるとランダムに配置され、指す時間が切れると負けです。通信が切れても時間は進みます。</li>
+    <li>レートはこの端末に結びついています。ブラウザのデータを消すと、新しいプレイヤーとして1500からになります。</li>
   </ul>
   <h3>はじめの配置</h3>
   <p>自陣2段(10マス)に6枚を自由に置きます。2人対戦では、交代のたびに「端末を渡してください」画面が出ます。</p>
@@ -990,6 +1017,9 @@ function showOver(){
   $('#ovUndo').style.display = online ? 'none' : '';
   $('#ovMenu').textContent = online ? 'ルームを出る' : 'もう一局(メニューへ)';
   $('#ovAgain').style.display = online && ONL.host() ? '' : 'none';
+  $('#ovRandom').style.display = online && ONL.rated() && ONL.side() >= 0 ? '' : 'none';
+  const rt = online ? ONL.rateText() : '';
+  $('#ovRate').textContent = rt; $('#ovRate').style.display = rt ? '' : 'none';
   $('#over').classList.add('show');
 }
 function canAct(){
@@ -1045,6 +1075,8 @@ function render(){
   else st = S.log ? `直前の手:${S.log}` : '先手から指します';
   $('#status').textContent = st;
   $('#lockNote').style.display = S.mode === 'online' ? '' : 'none';
+  const rn = S.mode === 'online' ? ONL.rateNote() : '';
+  $('#rateNote').textContent = rn; $('#rateNote').style.display = rn ? '' : 'none';
   renderEvalBar(v, setup);
 
   // 持ち駒
@@ -1135,7 +1167,7 @@ function renderControls(setup){
     if (S.mode === 'online'){
       const sp = ONL.side() < 0;   // 観戦者
       el.innerHTML = S.phase === 'over'
-        ? `<div class="btns"><button class="btn primary" data-act="record">棋譜と形勢</button>${ONL.host() ? '<button class="btn" data-act="again">もう一局</button>' : ''}<button class="btn" data-act="restart">退出</button></div>`
+        ? `<div class="btns"><button class="btn primary" data-act="record">棋譜と形勢</button>${ONL.host() ? '<button class="btn" data-act="again">もう一局</button>' : ''}${ONL.rated() && !sp ? '<button class="btn" data-act="randomAgain">次の対戦</button>' : ''}<button class="btn" data-act="restart">退出</button></div>`
         : `<div class="btns">${sp ? '' : '<button class="btn" data-act="resign">投了</button>'}<button class="btn" data-act="restart">退出</button><button class="btn" data-act="rules" style="flex:.6">ルール</button></div>`;
       return;
     }
@@ -1288,6 +1320,7 @@ const ACT = {
   startOnline: () => ONL.open(),
   waitCancel: () => { if (confirm(ONL.leaveMsg())) ONL.leave(true); },
   again: () => ONL.again(),
+  randomAgain: () => ONL.randomAgain(),
   resign: () => { if (!S || S.mode !== 'online' || S.phase !== 'play') return; if (confirm('投了しますか?')) ONL.resign(); },
   toggleEval: () => { UI.showEval = !UI.showEval; saveEvalPref(UI.showEval); render(); },
   record: () => { if (!S || !S.kifu){ toast('相手の駒の公開を待っています'); return; } hideOv('over'); openRecord(); },
@@ -1355,7 +1388,7 @@ const ONL = (() => {
   // ---- 状態 ----
   let ws = null, code = '', watching = false, leaving = false;
   let room = null, mySeat = -1, waiting = false, waitT = null, finished = false, shownOver = false;
-  let retryT = null, retryN = 0, beatT = null, heard = 0, netMsg = '', busyUI = false;
+  let retryT = null, retryN = 0, beatT = null, heard = 0, netMsg = '', busyUI = false, clockOff = 0;
   const prof = lsGet('oboroProf') || {};
   let myName = cleanName(prof.name), myCol = clampCol(prof.col), nameTimer = null;
   // ルームごとの合言葉(この端末だけが持つ)。ページを閉じても、同じ合言葉で同じ席に戻れる
@@ -1382,7 +1415,8 @@ const ONL = (() => {
       badcode: 'ルームIDは4文字で入力してください',
       timeout: '中継サーバーにつながりません。通信環境と SERVER_URL を確認してください',
       closed: '中継サーバーとの接続が切れました',
-      badmove: 'その手は受け付けられませんでした', notyourturn: '相手の番です', badsetup: '配置が正しくありません'
+      badmove: 'その手は受け付けられませんでした', notyourturn: '相手の番です', badsetup: '配置が正しくありません',
+      badkey: 'この端末のプレイヤー情報がサーバーの記録と合いません', badplayer: 'プレイヤー情報が正しくありません'
     })[t] || ('接続できませんでした' + (t ? '(' + t + ')' : ''));
   };
 
@@ -1460,6 +1494,12 @@ const ONL = (() => {
     o.final = null;
     if (d.final && typeof d.final === 'object' && Array.isArray(d.final.layouts) && d.final.layouts.length === 2) o.final = {layouts: d.final.layouts.map(cleanLayout), moves: cleanMoves(d.final.moves)};
     if ((o.phase === 'play' || o.phase === 'over') && !o.game) throw new Error('game');
+    // レート戦(ランダム対戦)の情報と持ち時間。古いサーバーでは届かないので、既定値で補う
+    const pair = a => (Array.isArray(a) && a.length === 2 && a.every(Number.isFinite) ? a.map(Math.round) : null);
+    o.rated = d.rated && typeof d.rated === 'object' && pair(d.rated.r) ? {r: pair(d.rated.r), nr: pair(d.rated.nr), d: pair(d.rated.d), done: !!d.rated.done} : null;
+    o.auto = Array.isArray(d.auto) ? [!!d.auto[0], !!d.auto[1]] : [false, false];
+    o.deadline = Number.isFinite(d.deadline) && d.deadline > 0 ? d.deadline : 0;
+    o.now = Number.isFinite(d.now) ? d.now : 0;
     return o;
   }
 
@@ -1497,8 +1537,12 @@ const ONL = (() => {
   function onRoom(raw) {
     let d; try { d = cleanRoom(raw); } catch (e) { console.warn('部屋の状態が正しくありません', e); sync(); return; }
     const prev = room; room = d; mySeat = d.me.seat;
+    if (d.now) clockOff = d.now - Date.now();   // 持ち時間の表示用(サーバーの時計とのずれ)
+    tick();
     if (d.me.spec) watching = true;
     if (prev && prev.gen !== d.gen) resetLocal();
+    if (d.rated && prev && prev.phase === 'setup' && d.phase === 'play' && mySeat >= 0 && d.auto[mySeat]) toast('配置の時間が切れたため、駒をランダムに配置しました');
+    if (d.rated && d.phase === 'over') { const e = rooms()[code]; if (e && e.mid) markDone(e.mid); }
     waiting = false; clearTimeout(waitT);
     refreshNet();
     if (d.phase === 'lobby') { if (S && S.mode === 'online') S = null; hideWait(); showScreen('menu'); openPanel(); return; }
@@ -1510,7 +1554,7 @@ const ONL = (() => {
       return;
     }
     // play / over
-    if (finished) { refresh(); return; }
+    if (finished) { refresh(); updateOverRate(); return; }
     closePanel(); hideWait(); showScreen('game');
     if (d.phase === 'over' && d.final) {   // 終局:全部の駒が公開されたので、最初から再生して棋譜と形勢グラフを作る
       finished = true;
@@ -1573,8 +1617,9 @@ const ONL = (() => {
     if (document.activeElement !== $('#onName')) $('#onName').value = myName;
     $('#onCols').innerHTML = PALETTE.map((c, i) => `<button class="colbtn${i === myCol ? ' sel' : ''}" data-col="${i}" style="background:${c}" aria-label="${COL_NAME[i]}"></button>`).join('');
     if (!inRoom) {
+      renderRandom();
       const r = rooms(), list = Object.keys(r).filter(k => /^[A-Z0-9]{4}$/.test(k) && Date.now() - (r[k].at || 0) < 7 * 864e5).sort((a, b) => r[b].at - r[a].at).slice(0, 5);
-      $('#onRecent').innerHTML = list.length ? '<div class="onlbl">続きの対局(この端末で入ったルーム)</div>' + list.map(k => `<button class="lrow" data-room="${k}"><b>${k}</b><span>続きから入る</span></button>`).join('') : '';
+      $('#onRecent').innerHTML = list.length ? '<div class="onlbl">続きの対局(この端末で入ったルーム)</div>' + list.map(k => `<button class="lrow" data-room="${k}"><b>${k}</b><span>${r[k].rated ? 'レート戦・' : ''}続きから入る</span></button>`).join('') : '';
       return;
     }
     $('#onCodeBig').textContent = code;
@@ -1685,6 +1730,7 @@ const ONL = (() => {
   }
   async function withBusy(f) {
     if (busyUI) return; busyUI = true; setErr('');
+    if (mmOn) randomCancel();   // 探している途中でルームに入る時は、探すのをやめる
     $('#onCreate').disabled = $('#onJoin').disabled = $('#onWatch').disabled = true;
     try { await f(); } catch (e) { teardown(); ssSet('oboroSess', null); setErr(errText(e)); renderPanel(); }
     finally { busyUI = false; $('#onCreate').disabled = $('#onJoin').disabled = $('#onWatch').disabled = false; }
@@ -1712,6 +1758,7 @@ const ONL = (() => {
     leaving = true;
     const c = code;
     if (room && room.phase === 'lobby' && !watching) forgetRoom(c);   // 待合室から抜けた:続きの一覧から消す
+    if (room && room.rated && room.phase === 'over') forgetRoom(c);   // 終わったレート戦は、続きの一覧から消す
     send({t: 'leave'});
     await new Promise(r => setTimeout(r, 150));
     ssSet('oboroSess', null);
@@ -1721,7 +1768,9 @@ const ONL = (() => {
     closePanel(); setErr('');
     if (toMenu) showScreen('menu');
   }
-  const leaveMsg = () => (watching ? '観戦をやめて、メニューに戻りますか?' : room && room.phase !== 'lobby' && room.phase !== 'over' ? '退出しますか?(このルームIDで、あとから続きに戻れます)' : '退出しますか?');
+  const leaveMsg = () => (watching ? '観戦をやめて、メニューに戻りますか?'
+    : room && room.rated && room.phase !== 'over' ? '退出しますか?(「続きの対局」から戻れます。持ち時間は進み続け、切れると負けになります)'
+    : room && room.phase !== 'lobby' && room.phase !== 'over' ? '退出しますか?(このルームIDで、あとから続きに戻れます)' : '退出しますか?');
 
   // ===== 対局中の操作(サーバーへ送り、返事の盤面で画面を更新する) =====
   const mayAct = () => !!room && room.phase === 'play' && mySeat >= 0 && !!S && S.mode === 'online' && S.phase === 'play' && S.turn === mySeat && !waiting && !!(ws && ws.readyState === 1);
@@ -1741,6 +1790,124 @@ const ONL = (() => {
   function takeSeat(n) { if (room && room.phase === 'lobby' && !watching) send({t: 'seat', n: mySeat === n ? -1 : n}); }
   function pushProf() { if (code && room && room.phase === 'lobby' && !watching) send({t: 'me', name: myName, col: myCol}); }
 
+  // ===== ランダム対戦(レート) =====
+  // ・待合所(サーバーの /mm)に WebSocket でつなぎ、プレイヤーID と鍵で名乗ってから、待ち行列に入る。
+  // ・組み合わせが決まると、ルームIDと合言葉が届くので、いつものルームの入り方(join)で入る。
+  // ・プレイヤーID と鍵はこの端末の localStorage(oboroPlayer)にだけある。消すと別のプレイヤーになる。
+  let mm = null, mmOn = false, mmT0 = 0, mmRetryT = null, mmBeat = 0, myRate = null;
+  function player(make) {
+    const p = lsGet('oboroPlayer');
+    if (p && typeof p.pid === 'string' && /^[0-9a-f]{24}$/.test(p.pid) && typeof p.key === 'string' && /^[0-9a-f]{32}$/.test(p.key)) return p;
+    if (!make) return null;
+    const q = {pid: rnd(12), key: rnd(16)}; lsSet('oboroPlayer', q); return q;
+  }
+  const doneMids = () => { const a = lsGet('oboroRatedDone'); return Array.isArray(a) ? a.filter(x => typeof x === 'string' && /^[0-9a-f]{24}$/.test(x)).slice(0, 20) : []; };
+  function markDone(mid) { if (!/^[0-9a-f]{24}$/.test(mid)) return; lsSet('oboroRatedDone', [mid, ...doneMids().filter(x => x !== mid)].slice(0, 20)); }
+  function mmSend(m) { try { if (mm && mm.readyState === 1) { mm.send(JSON.stringify(m)); return true; } } catch (e) {} return false; }
+  function mmClose() { clearTimeout(mmRetryT); mmRetryT = null; const s = mm; mm = null; try { if (s) s.close(); } catch (e) {} }
+  function mmConnect() {
+    const base = serverBase(), p = player(mmOn);
+    if (!base || !p) return;
+    mmClose();
+    let s; try { s = new WebSocket(`${base}/mm`); } catch (e) { mmLost(); return; }
+    mm = s; mmBeat = Date.now();
+    s.onopen = () => {
+      if (s !== mm) return;
+      s.send(JSON.stringify({t: 'hi', pid: p.pid, key: p.key, name: myName, col: myCol}));   // 待ち行列には、me(名乗りの返事)が届いてから入る
+    };
+    s.onmessage = ev => {
+      if (s !== mm || typeof ev.data !== 'string' || ev.data === 'pong' || ev.data.length > 4000) return;
+      let m; try { m = JSON.parse(ev.data); } catch (e) { return; }
+      if (m && typeof m === 'object') mmRecv(m);
+    };
+    s.onclose = () => { if (s === mm) { mm = null; mmLost(); } };
+    s.onerror = () => {};
+  }
+  function mmLost() { if (!mmOn) return; clearTimeout(mmRetryT); mmRetryT = setTimeout(mmConnect, 2000); renderRandom(); }
+  function mmRecv(m) {
+    if (m.t === 'me') {
+      const n = v => (isInt(v, 0, 1e7) ? v : 0);
+      myRate = {r: isInt(m.r, -9999, 99999) ? m.r : 1500, n: n(m.n), w: n(m.w), l: n(m.l)};
+      if (mmOn) mmSend({t: 'q', done: doneMids()});
+      else mmClose();   // レートを見に来ただけ
+      renderRandom();
+    } else if (m.t === 'match') {
+      const c = normCode(m.room);
+      if (c.length !== 4 || typeof m.tok !== 'string' || !/^[0-9a-f]{32}$/.test(m.tok)) return;
+      mmOn = false; mmClose();
+      const r = rooms(); r[c] = {tok: m.tok, at: Date.now(), mid: typeof m.mid === 'string' ? m.mid : '', rated: true}; lsSet('oboroRooms', r);
+      const o = m.opp && typeof m.opp === 'object' ? m.opp : {};
+      toast(m.back ? '対局中のレート戦に戻ります' : `対戦相手が見つかりました:${escH(cleanName(o.n) || '名前なし')}(${isInt(o.r, -9999, 99999) ? o.r : '?'})`);
+      renderRandom();
+      join(c);
+    } else if (m.t === 'err') {
+      mmOn = false; mmClose();
+      setErr(m.e === 'replaced' ? '別の画面でランダム対戦を始めたため、こちらは止めました' : errText({type: m.e}));
+      renderRandom();
+    }
+  }
+  function randomStart() {
+    if (code || busyUI || mmOn) return;
+    if (!serverBase()) { setErr(errText({type: 'noserver'})); return; }
+    setErr(''); mmOn = true; mmT0 = Date.now();
+    mmConnect(); renderRandom();
+  }
+  function randomCancel() {
+    mmSend({t: 'cancel'}); mmOn = false;
+    const s = mm; setTimeout(() => { if (mm === s) mmClose(); }, 300);
+    renderRandom();
+  }
+  async function randomAgain() { await leave(true); open(); randomStart(); }
+  function renderRandom() {
+    const rr = $('#onRate');
+    if (myRate) rr.innerHTML = `あなたのレート<b>${myRate.r}</b>(${myRate.n}局 ${myRate.w}勝${myRate.l}敗)`;
+    else rr.textContent = player(false) ? 'レートを読み込んでいます…' : 'レートは1500から始まります';
+    $('#onRandom').style.display = mmOn ? 'none' : '';
+    $('#onRandom').disabled = busyUI;
+    $('#onSearch').style.display = mmOn ? '' : 'none';
+    drawSearch();
+  }
+  function drawSearch() {
+    if (!mmOn) return;
+    const sec = Math.floor((Date.now() - mmT0) / 1000);
+    $('#onSearchTxt').textContent = (mm && mm.readyState === 1 ? '対戦相手を探しています…' : '待合所につないでいます…') + ` ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+  }
+  // 1秒ごと:持ち時間と、探している時間の表示
+  function tick() {
+    const el = $('#clock');
+    const on = !!(room && room.rated && room.deadline && (room.phase === 'setup' || room.phase === 'play'));
+    if (!on) { if (el.style.display !== 'none') el.style.display = 'none'; }
+    else {
+      const sec = Math.max(0, Math.ceil((room.deadline - (Date.now() + clockOff)) / 1000));
+      el.textContent = `⏱ ${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+      el.classList.toggle('low', sec <= 15); el.style.display = '';
+    }
+    if (mmOn) {
+      drawSearch();
+      if (mm && mm.readyState === 1 && Date.now() - mmBeat > 15000) { mmBeat = Date.now(); try { mm.send('ping'); } catch (e) {} }
+    }
+  }
+  const isRated = () => !!(room && room.rated);
+  const sgn = v => (v > 0 ? '+' + v : String(v));
+  function rateNote() {   // 対局画面の小さな表示:レート戦であることと、双方のレート
+    if (!isRated()) return '';
+    const nm = s => (room.seats[s] && room.seats[s].n) || SIDE_NAME[s];
+    return `⚔ レート戦 ${nm(0)} ${room.rated.r[0]} 対 ${nm(1)} ${room.rated.r[1]}`;
+  }
+  function rateText() {   // 終局画面:レートの増減
+    if (!isRated()) return '';
+    const rt = room.rated;
+    if (!rt.done) return 'レートを集計しています…';
+    if (!rt.d || !rt.nr) return 'この対局はレートに反映できませんでした';
+    if (mySeat >= 0) { myRate = null; return `レート ${rt.r[mySeat]} → ${rt.nr[mySeat]}(${sgn(rt.d[mySeat])})`; }
+    const nm = s => (room.seats[s] && room.seats[s].n) || SIDE_NAME[s];
+    return `${nm(0)} ${sgn(rt.d[0])} / ${nm(1)} ${sgn(rt.d[1])}`;
+  }
+  function updateOverRate() {
+    if (!$('#over').classList.contains('show')) return;
+    const t = rateText(); $('#ovRate').textContent = t; $('#ovRate').style.display = t ? '' : 'none';
+  }
+
   // ===== 画面の部品をつなぐ =====
   const inviteUrl = () => location.href.split(/[?#]/)[0] + '?room=' + code;
   async function copyText(t, okMsg) { try { await navigator.clipboard.writeText(t); toast(okMsg); } catch (e) { toast(`${t} をそのまま相手に伝えてください`); } }
@@ -1752,10 +1919,14 @@ const ONL = (() => {
   function open() {
     setErr(''); renderPanel(); $('#online').classList.add('show');
     if (!code && !serverBase()) setErr(errText({type: 'noserver'}));
+    if (!code && !mmOn && !mm && player(false)) mmConnect();   // 自分のレートを見に行く
   }
   function onClick(id, f) { $(id).addEventListener('click', f); }
   function init() {
-    onClick('#onClose', () => { if (code) { if (confirm(leaveMsg())) leave(true); } else closePanel(); });
+    onClick('#onClose', () => { if (code) { if (confirm(leaveMsg())) leave(true); } else { if (mmOn) randomCancel(); closePanel(); } });
+    onClick('#onRandom', randomStart);
+    onClick('#onCancel', randomCancel);
+    setInterval(tick, 1000);
     onClick('#onCreate', create);
     onClick('#onJoin', () => join());
     onClick('#onWatch', () => watch());
@@ -1776,7 +1947,12 @@ const ONL = (() => {
     $('#onCode').addEventListener('input', e => { e.target.value = normCode(e.target.value); });
     $('#onCode').addEventListener('keydown', e => { if (e.key === 'Enter') join(); });
     // スマホで別のアプリから戻ってきた時は、すぐに接続を確かめる
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && code && !(ws && ws.readyState === 1) && !retryT) retry(); });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') return;
+      if (code && !(ws && ws.readyState === 1) && !retryT) retry();
+      if (mmOn && !(mm && mm.readyState === 1)) mmConnect();
+      tick();
+    });
     boot();
   }
   function boot() {   // ページを開いた時:再読み込みなら続きから、招待リンクならルームIDを入れておく
@@ -1786,8 +1962,9 @@ const ONL = (() => {
     if (q.length === 4) { $('#onCode').value = q; open(); }
   }
   return {init, open, create, join, watch, seat: takeSeat, start: () => send({t: 'start'}), again: () => send({t: 'again'}), leave, leaveMsg, resign, submitSetup, move,
-    canAct: mayAct, active: () => !!code, side: () => mySeat, host: () => mySeat >= 0, spectating: () => watching, label, dotColor,
-    validateState, cleanRoom, debug: () => ({code, seat: mySeat, waiting, phase: room && room.phase, gen: room && room.gen, open: !!(ws && ws.readyState === 1)})};
+    canAct: mayAct, active: () => !!code, side: () => mySeat, host: () => mySeat >= 0 && !isRated(), spectating: () => watching, label, dotColor,
+    rated: isRated, rateNote, rateText, randomStart, randomAgain,
+    validateState, cleanRoom, debug: () => ({code, seat: mySeat, waiting, phase: room && room.phase, gen: room && room.gen, open: !!(ws && ws.readyState === 1), mmOn, rate: myRate})};
 })();
 ONL.init();
 
